@@ -7,8 +7,8 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
 # --- CONFIGURATION (set via environment variables) ---
-APIFY_TASK_ID = MsZ18ZHb5ghul6vIQ("APIFY_TASK_ID")
-APIFY_TOKEN = apify_api_GQ6bVcY9kQBjWWgfrGcBLmlqgBCxZy1fD1Wm("APIFY_TOKEN")
+APIFY_TASK_ID = os.getenv("APIFY_TASK_ID")
+APIFY_TOKEN = os.getenv("APIFY_TOKEN")
 DISCOUNT_THRESHOLD = float(os.getenv("DISCOUNT_THRESHOLD", 0.25))
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 ALERT_EMAIL_TO = os.getenv("ALERT_EMAIL_TO")
