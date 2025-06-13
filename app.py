@@ -1,65 +1,74 @@
-# Zillow Deal Finder Bot (MVP)
-# Phase 1: Mock Data + Filter + Streamlit Dashboard + Daily Email
-
+import os
 import pandas as pd
 import streamlit as st
+import requests
 from datetime import datetime
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 
-# ---------------------------
-# MOCK DATA
-# ---------------------------
-mock_data = [
-    {
-        "address": "123 Oak St, Atlanta, GA",
-        "price": 150000,
-        "zestimate": 215000,
-        "daysOnZillow": 42,
-        "detailUrl": "https://www.zillow.com/homedetails/123oak"
-    },
-    {
-        "address": "456 Maple Ave, Dallas, TX",
-        "price": 190000,
-        "zestimate": 260000,
-        "daysOnZillow": 35,
-        "detailUrl": "https://www.zillow.com/homedetails/456maple"
-    },
-    {
-        "address": "789 Pine Rd, Charlotte, NC",
-        "price": 170000,
-        "zestimate": 200000,
-        "daysOnZillow": 15,
-        "detailUrl": "https://www.zillow.com/homedetails/789pine"
-    },
-    {
-        "address": "321 Birch Blvd, Phoenix, AZ",
-        "price": 300000,
-        "zestimate": 300000,
-        "daysOnZillow": 5,
-        "detailUrl": "https://www.zillow.com/homedetails/321birch"
-    }
-]
+# --- CONFIGURATION (set via environment variables) ---
+APIFY_TASK_ID = MsZ18ZHb5ghul6vIQ("APIFY_TASK_ID")
+APIFY_TOKEN = apify_api_GQ6bVcY9kQBjWWgfrGcBLmlqgBCxZy1fD1Wm("APIFY_TOKEN")
+DISCOUNT_THRESHOLD = float(os.getenv("DISCOUNT_THRESHOLD", 0.25))
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
+ALERT_EMAIL_TO = os.getenv("ALERT_EMAIL_TO")
+ALERT_EMAIL_FROM = os.getenv("ALERT_EMAIL_FROM")
 
-# ---------------------------
-# FUNCTION: Filter Deals
-# ---------------------------
-def filter_deals(data):
-    df = pd.DataFrame(data)
-    df = df[df['zestimate'].notnull() & df['price'].notnull()]
-    df['discount_pct'] = 1 - (df['price'] / df['zestimate'])
-    df_filtered = df[df['discount_pct'] >= 0.25]
-    return df_filtered.sort_values(by='discount_pct', ascending=False)
+# --- Fetch data from Apify Zillow actor ---
+def fetch_zillow_data():
+    url = f"https://api.apify.com/v2/actor-tasks/{APIFY_TASK_ID}/runs/last/dataset/items?token={APIFY_TOKEN}"
+    resp = requests.get(url)
+    if resp.status_code != 200:
+        st.error(f"Failed to fetch: {resp.status_code}")
+        return pd.DataFrame()
+    data = resp.json()
+    df = pd.json_normalize(data)
+    return df
 
-# ---------------------------
-# STREAMLIT DASHBOARD
-# ---------------------------
-st.title("🏠 Zillow Deal Finder - 25%+ Below Market (Mock Data)")
-st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+# --- Filter deals 25%+ below Zestimate ---
+def filter_deals(df):
+    df = df.dropna(subset=["price", "zestimate", "detailUrl", "address"])
+    df["discount_pct"] = 1 - (df["price"] / df["zestimate"])
+    return df[df["discount_pct"] >= DISCOUNT_THRESHOLD].sort_values("discount_pct", ascending=False)
 
-with st.spinner("Using mock property data..."):
-    df_deals = filter_deals(mock_data)
+# --- Send email digest ---
+def send_email(df):
+    if df.empty:
+        return
+    rows = df.to_dict("records")
+    body = "<h3>Real Estate Deals—25%+ Below Market</h3><ul>"
+    for r in rows:
+        pct = round(r["discount_pct"] * 100)
+        body += f"<li><a href='{r['detailUrl']}'>{r['address']}</a>: ${r['price']} (~{pct}% below market)</li>"
+    body += "</ul>"
+    msg = Mail(
+        from_email=ALERT_EMAIL_FROM,
+        to_emails=ALERT_EMAIL_TO,
+        subject="🏠 New Real Estate Deals Alert",
+        html_content=body
+    )
+    sg = SendGridAPIClient(SENDGRID_API_KEY)
+    sg.send(msg)
 
-    if not df_deals.empty:
-        st.success(f"Found {len(df_deals)} deals 25%+ below market.")
-        st.dataframe(df_deals[['address', 'price', 'zestimate', 'discount_pct', 'daysOnZillow', 'detailUrl']])
-    else:
-        st.warning("No deals found with 25% discount or more.")
+# --- Streamlit UI ---
+def main():
+    st.title("🏠 Real-Time Zillow Deal Finder")
+    st.caption(f"Last checked: {datetime.now():%Y-%m-%d %H:%M:%S}")
+
+    df = fetch_zillow_data()
+    if df.empty:
+        st.error("No data received.")
+        return
+
+    deals = filter_deals(df)
+    st.success(f"Found {len(deals)} deals ≥ {int(DISCOUNT_THRESHOLD*100)}% below market")
+
+    st.dataframe(deals[["address", "price", "zestimate", "discount_pct", "daysOnZillow", "detailUrl"]])
+
+    # Trigger one-time email send
+    if st.button("Send Now"):
+        send_email(deals)
+        st.info("Email sent!")
+
+if __name__ == "__main__":
+    main()
